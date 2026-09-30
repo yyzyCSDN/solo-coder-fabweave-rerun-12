@@ -5,6 +5,14 @@ from dataclasses import dataclass, replace
 from fabweave.chamber.matching import Tolerance, mismatch_reasons
 from fabweave.chemicals.shelf_life import shelf_life_remaining
 from fabweave.cleanroom.excursion import active_excursion
+from fabweave.contamination.recall import (
+    ContaminationRecall,
+    ContaminationTraceGraph,
+    HoldBook,
+    MaterialObject,
+    RecallLedger,
+    recall_contamination,
+)
 from fabweave.contamination.segregation import incompatible_pairs
 from fabweave.core.decision import Decision, allow, deny
 from fabweave.core.events import EventLog
@@ -193,6 +201,40 @@ def record_containment(
         {"scope": list(scope)},
     )
     return ContainmentRecord(tuple(event.data["scope"]), event.sequence)
+
+
+@dataclass(frozen=True, slots=True)
+class ContaminationRecallRecord:
+    recall: ContaminationRecall
+    event_sequence: int
+
+
+def record_contamination_recall(
+    log: EventLog,
+    request_id: str,
+    graph: ContaminationTraceGraph,
+    material_states: dict[str, MaterialObject],
+    seeds: list[str],
+    max_depth: int,
+    holds: HoldBook,
+    ledger: RecallLedger,
+    at: int,
+) -> ContaminationRecallRecord:
+    recall = recall_contamination(request_id, graph, material_states, seeds, max_depth, holds, ledger)
+    event = log.append(
+        f"contamination-recall:{request_id}",
+        0,
+        request_id,
+        at,
+        "contamination_recalled",
+        {
+            "affected_objects": list(recall.affected_objects),
+            "held_objects": list(recall.held_objects),
+            "shipped_objects": list(recall.shipped_objects),
+            "disposed_objects": list(recall.disposed_objects),
+        },
+    )
+    return ContaminationRecallRecord(recall, event.sequence)
 
 
 def powered_assignment(
