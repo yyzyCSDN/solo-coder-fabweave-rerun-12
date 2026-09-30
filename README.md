@@ -9,9 +9,10 @@ contamination, takt, route yield and shipment commitments.
 
 The cross-domain workflow layer composes these services for material
 readiness, dispatch-after-hold, qualified reservations and assignments,
-metrology/SPC gates, containment, powered scheduling, rework release,
-merge-to-commit and performance reporting.  It preserves domain rejection
-reasons instead of replacing them with a generic success or failure.
+metrology/SPC gates, containment, source-contamination recall, powered
+scheduling, rework release, merge-to-commit and performance reporting.  It
+preserves domain rejection reasons instead of replacing them with a generic
+success or failure.
 
 Shared infrastructure supplies half-open time intervals, versioned policy
 history, immutable decisions, quantity conservation and an append-only event

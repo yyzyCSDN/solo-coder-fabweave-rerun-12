@@ -13,6 +13,7 @@ from fabweave.dedication.tool import DedicationPolicy, policy_decision
 from fabweave.dispatch.priority import DispatchCandidate, rank_candidates
 from fabweave.energy.demand import demand_violations
 from fabweave.genealogy.carrier import GenealogyGraph
+from fabweave.genealogy.recall import RecallGraph
 from fabweave.holds.release import HoldState, release_decision
 from fabweave.lot.merge import Lot, merge_lots
 from fabweave.maintenance.window import MaintenancePolicy, assignment_decision
@@ -193,6 +194,61 @@ def record_containment(
         {"scope": list(scope)},
     )
     return ContainmentRecord(tuple(event.data["scope"]), event.sequence)
+
+
+def recall_scope(graph: RecallGraph, seeds: list[str], max_depth: int) -> tuple[str, ...]:
+    impacted = set(seeds)
+    for seed in seeds:
+        impacted.update(graph.related(seed, max_depth))
+    return tuple(sorted(impacted))
+
+
+@dataclass(frozen=True, slots=True)
+class RecallRecord:
+    scope: tuple[str, ...]
+    held: tuple[str, ...]
+    shipped: tuple[str, ...]
+    disposed: tuple[str, ...]
+    event_sequence: int
+
+
+def execute_recall(
+    log: EventLog,
+    request_id: str,
+    graph: RecallGraph,
+    seeds: list[str],
+    max_depth: int,
+    dispositions: dict[str, str],
+    at: int,
+) -> RecallRecord:
+    scope = recall_scope(graph, seeds, max_depth)
+    wip: list[str] = []
+    shipped: list[str] = []
+    disposed: list[str] = []
+    for object_id in scope:
+        disposition = dispositions.get(object_id, "wip")
+        if disposition == "wip":
+            wip.append(object_id)
+        elif disposition == "shipped":
+            shipped.append(object_id)
+        elif disposition == "disposed":
+            disposed.append(object_id)
+        else:
+            raise ValueError(f"unknown disposition: {disposition}")
+    stream = f"recall:{request_id}"
+    sequence = len(log.read(stream))
+    for object_id in wip:
+        event = log.append(
+            stream,
+            sequence,
+            f"{request_id}:hold:{object_id}",
+            at,
+            "hold_placed",
+            {"request_id": request_id, "object_id": object_id},
+        )
+        sequence = max(sequence, event.sequence)
+    # Shipped and disposed objects cannot be held but stay in the recall scope.
+    return RecallRecord(scope, tuple(wip), tuple(shipped), tuple(disposed), sequence)
 
 
 def powered_assignment(

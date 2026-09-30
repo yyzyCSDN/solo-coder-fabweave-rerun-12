@@ -17,6 +17,7 @@ from fabweave.dedication.tool import DedicationPolicy, policy_decision
 from fabweave.dispatch.priority import DispatchCandidate, rank_candidates
 from fabweave.energy.demand import coincident_peak, demand_violations
 from fabweave.genealogy.carrier import GenealogyGraph
+from fabweave.genealogy.recall import RecallGraph
 from fabweave.holds.release import HoldState, release_decision
 from fabweave.lot.merge import Lot, merge_lots
 from fabweave.maintenance.window import MaintenancePolicy, assignment_decision
@@ -35,12 +36,14 @@ from fabweave.workflows.control import (
     dedicated_qualification,
     environmental_containment,
     evaluate_sample,
+    execute_recall,
     material_readiness,
     merge_and_commit,
     performance_summary,
     powered_assignment,
     qualified_assignment,
     rank_releasable,
+    recall_scope,
     record_containment,
     reserve_qualified,
     rework_release_decision,
@@ -317,6 +320,58 @@ def test_containment_record_is_idempotent_and_binds_the_planned_scope():
     first = record_containment(log, "RECALL-1", graph, ["B"], 1, 10)
     replay = record_containment(log, "RECALL-1", graph, ["B"], 1, 10)
     assert first == replay and first.scope == ("A", "B", "C") and first.event_sequence == 1
+
+
+def test_recall_graph_spreads_bidirectionally_through_splits_merges_and_carriers():
+    diamonds = [("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")]
+    graph = RecallGraph(diamonds, {"K": ["D", "E"]})
+    assert graph.related("A", 1) == ("B", "C")
+    assert graph.related("A", 2) == ("B", "C", "D")
+    assert graph.related("D", 1) == ("B", "C", "K")
+    assert graph.related("E", 3) == ("B", "C", "D", "K")
+
+
+def test_recall_graph_dedupes_cycles_and_rejects_degenerate_input():
+    graph = RecallGraph([("A", "B"), ("B", "C"), ("C", "A")])
+    assert graph.related("A", 9) == ("B", "C")
+    with pytest.raises(ValueError):
+        RecallGraph([("A", "A")])
+    with pytest.raises(ValueError):
+        RecallGraph(carriers={"K": ["K"]})
+    with pytest.raises(ValueError):
+        graph.related("A", -1)
+
+
+def test_recall_scope_respects_depth_and_keeps_unlinked_seeds():
+    graph = RecallGraph([("A", "B"), ("B", "C")], {"K": ["C"]})
+    assert recall_scope(graph, ["A"], 1) == ("A", "B")
+    assert recall_scope(graph, ["A"], 3) == ("A", "B", "C", "K")
+    assert recall_scope(graph, ["ZZ"], 2) == ("ZZ",)
+
+
+def test_execute_recall_holds_wip_idempotently_and_keeps_unholdable_in_scope():
+    graph = RecallGraph([("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")], {"K": ["D", "E"]})
+    dispositions = {"C": "shipped", "E": "disposed"}
+    log = EventLog()
+    first = execute_recall(log, "RECALL-1", graph, ["A"], 5, dispositions, 10)
+    assert first.scope == ("A", "B", "C", "D", "E", "K")
+    assert first.held == ("A", "B", "D", "K")
+    assert first.shipped == ("C",)
+    assert first.disposed == ("E",)
+    assert first.event_sequence == 4
+    replay = execute_recall(log, "RECALL-1", graph, ["A"], 5, dispositions, 10)
+    assert replay == first
+    events = log.read("recall:RECALL-1")
+    assert [event.data["object_id"] for event in events] == ["A", "B", "D", "K"]
+    assert all(event.kind == "hold_placed" for event in events)
+
+
+def test_execute_recall_validates_dispositions_before_holding():
+    graph = RecallGraph([("A", "B")])
+    log = EventLog()
+    with pytest.raises(ValueError):
+        execute_recall(log, "RECALL-9", graph, ["A"], 1, {"B": "lost"}, 10)
+    assert log.read("recall:RECALL-9") == ()
 
 
 def test_powered_assignment_combines_peak_and_maintenance_reasons():
